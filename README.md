@@ -1,6 +1,7 @@
 # CommandLineUtilities
 
-This is a random (growing?) collection of command line utilities, I use everyday. My *bash-fu* is not very strong: please be patient with me. Any help, suggestion, or improvement are more than welcome. 
+This is a random (growing?) collection of (tiny!) command line utilities, I use everyday. 
+Please note that my *bash-fu* is not very strong: be patient with me! Suggestions or improvements are welcome. 
 
   1. [Votational Nelocity](#votational-nelocity)(a bash script, inspired by Notational Velocity note taking)
   2. [Scratch pad](#scratch-pad) (a bash script, appending text to a monthly "scratch pad" text file)
