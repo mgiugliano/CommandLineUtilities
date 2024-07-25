@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+
+# Creates/Appends text to a scratch note - inspired by notekami by gotbletu
+# and also based on a past own script using MacVim and Hammerspoon.
+# As opposed to gotbletu'script, this does not add a new timestamp unless the user saves the file.
+
+# Jul 18 2024 - Michele Giugliano
+
+
+# Let's first set the path to the scratch folder inside the notes repo...
+scratch="$NOTES/scratch"
+
+# If it does not exist, let's create it.
+[ ! -d "$scratch" ] && mkdir -p "$scratch"
+
+# Name the (new) file uniquely, using dates (i.e. there is one file per month)...
+filename="$scratch/$(date '+%Y-%m_scratch.md')" # e.g. 2024-07_scratch.md
+
+# Let's prepare a (new) timestamp to be appended at the very end of the file...
+timestamp=$(date) # e.g. Thu Jul 18 23:35:49 CEST 2024
+
+# If it doesn't exist, let's create it and add a simple title and a quote...
+if [ ! -f "$filename" ]; then   # if the file doesn't exist
+    touch "$filename"           # create it
+    echo -e "# Scratch for $(date '+%Y %b')" >> "$filename" # add a title
+    echo -e "Everything that has a beginning must have an end.\n" >> "$filename" # add a quote
+fi
+
+# Let's open the file in nvim, with the cursor at the end of the file, ready to type...
+header="------\n## $timestamp\n"
+echo -e "$header" > /tmp/8vfh.md # create a temporary file with the timestamp
+
+# Open the file in nvim, with the cursor at the end of the file, ready to type...
+$EDITOR -c "normal Go" -c "r /tmp/8vfh.md"  -c "normal Go" -c ":startinsert" "$filename"
+
+rm /tmp/8vfh.md # remove the temporary file
+
+# Finally, open the file in obsidian
+#open -a "Obsidian" "$filename"
