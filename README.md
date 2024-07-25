@@ -1,10 +1,13 @@
 # CommandLineUtilities
 
-This is a random collection of command line utilities, I use everyday.
+This is a random collection of command line utilities, I use everyday:
+
+  1. [Votational Nelocity](#votational-nelocity)(a bash script, inspired by Notational Velocity note taking)
+  2. [Scratch pad](#scratch-pad) (a bash script, appending text to a monthly "scratch pad" text file) 
 
 ## Votational Nelocity
 
-This is heavily inspired by [Notational Velocity](https://en.wikipedia.org/wiki/Notational_Velocity) note-taking software and its underlying concept and philosophy. It is a simple bash script, powered by [fd](https://github.com/sharkdp/fd), [ripgrep](https://github.com/BurntSushi/ripgrep) and of course [fzf](https://github.com/junegunn/fzf). It lives in the terminal and makes it easy for me to achieve the following actions:
+This script is heavily inspired by [Notational Velocity](https://en.wikipedia.org/wiki/Notational_Velocity) note-taking software and its underlying concept and philosophy. It is a simple bash script, powered by [fd](https://github.com/sharkdp/fd), [ripgrep](https://github.com/BurntSushi/ripgrep) and of course [fzf](https://github.com/junegunn/fzf). It lives in the terminal and makes it easy for me to achieve the following actions:
 
 - find and edit a text file in my "notes" folder, fuzzy searching it by filename and/or by content;
 - find and open a text file in Obsidian;
@@ -28,7 +31,35 @@ $EDITOR is currently not yet used by nv (with [NeoVim](https://neovim.io) used a
 export NOTES="/Users/MYUSERNAME/Library/Mobile Documents/iCloud~md~obsidian/Documents/notes"
 ```
 
+### How to use it (tested under macOs)
 
-### How to use it
+Invoking `nv` from the command line (or pressing cmd+p if using a shortcut) will open the fzf interface. Every time the search field is updated a new search is launched, combining filenames and text content of the files contained in $NOTES and its subfolders. Using Control-j and Control-k one can select across multiple hits in the upper part of the window, while having the preview (with syntax highlighting) in the lower part of the window.
 
-Invoking `nv` from the command line (or pressing cmd+p if using a shortcut) will open a panel
+![demo1](img/demo1.gif)
+
+Pressing Control-A launches the $EDITOR (currently nvim only) creating a file in $NOTES with the filename given by the search string (with suffix .md) and also with this string added as a title inside the text file.
+
+![demo2](img/demo2.gif)
+
+Pressing Control-O (not shown) launches Obsidian and opens the selected note in it.
+
+
+### Requirements: fzf, rg, fd, bat, nvim
+
+- brew install fzf
+- brew install rg
+- brew install fd
+- brew install bat
+- brew install nvim
+
+---------------
+
+## Scratch pad
+
+This script has been inspired by gotbletu's [work](https://github.com/gotbletu/fzf-nova/blob/main/_notekami%2C--.notes.cheatsheet.snippets.manager) for handling literally a scratch pad for jotting down temporary information, quick unorganised thoughts, things to copy-paste at a later stage, links, etc. 
+
+Using [Kitty](https://sw.kovidgoyal.net/kitty/), I have associated a simple shortcut (e.g. cmd+s) to launch the script in a new panel:
+
+```bash
+map cmd+s launch --env PATH=PATH --env EDITOR=EDITOR --env NOTES=NOTES /opt/homebrew/bin/bash -lc ~/.bin/scratch
+```
