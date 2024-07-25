@@ -1,9 +1,10 @@
 # CommandLineUtilities
 
-This is a random collection of command line utilities, I use everyday:
+This is a random (growing?) collection of command line utilities, I use everyday. My *bash-fu* is not very strong: please be patient with me. Any help, suggestion, or improvement are more than welcome. 
 
   1. [Votational Nelocity](#votational-nelocity)(a bash script, inspired by Notational Velocity note taking)
-  2. [Scratch pad](#scratch-pad) (a bash script, appending text to a monthly "scratch pad" text file) 
+  2. [Scratch pad](#scratch-pad) (a bash script, appending text to a monthly "scratch pad" text file)
+  3. 
 
 ## Votational Nelocity
 
@@ -63,3 +64,8 @@ Using [Kitty](https://sw.kovidgoyal.net/kitty/), I have associated a simple shor
 ```bash
 map cmd+s launch --env PATH=PATH --env EDITOR=EDITOR --env NOTES=NOTES /opt/homebrew/bin/bash -lc ~/.bin/scratch
 ```
+
+The specific location of the "scratch" file(s) is by default in `$EDITOR/scratch` and each time the script is launched it opens/creates a file uniquely named by year and month. Moreover, every time it is invoked, a timestamp is added and the cursor is placed at the very bottom of the file with nvim already in insert mode. 
+
+![demo3](img/demo3.gif)
+
