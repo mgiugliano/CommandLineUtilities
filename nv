@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+#
+# My Votational Nelocity - inspired by Notational Velocity and
+# by junegunni's demo code (see https://junegunn.github.io/fzf/tips/ripgrep-integration/)
+#
+# It combines both search of file names and of file content, with fzf fuzzy finder.
+#
+# June 25th, 2024 - July 24th 2024, Michele GIUGLIANO
+#
+
+# GLOBAL VARIABLES: $NOTES: the default path to search for files and content...
+
+# Let's specify the path to look for 'filename' OR for 'file content':
+builtin cd "$NOTES"     # This is the default path to search for files and content. Changing into this dir is useful for
+SEARCHPATH='./'         # keeping the output of FDCMD and RGCMD short.
+
+# This is the core of the search: two (key) commands including both fd and ripgrep.
+# fd: searches in $SEARCHPATH for filenames matching the search string, ignoring certain files (.gitignore or .ignore)
+# and returns the filename with a trailing colon and the (default) line and column numbers set to 1:1 (for bat preview).
+FDCMD="fd -e md --ignore --type file {q} '$SEARCHPATH' | sed 's/$/:1:1:/' | sort"
+
+# ripgrep: searches in $SEARCHPATH for files whose content matches the search string. We only consider *.md and *.txt files.
+# and returns the filename with a trailing colon and the exact line and column numbers (for fzf preview)
+RGCMD="rg -tmd --column --smart-case --color=always --sort=accessed --line-buffered {q} '$SEARCHPATH'"
+#-------------------------------------------------------------------------------------------------------------------------
+
+# Commands to be executed when the search string changes or when the user presses 'CTRL-R' to reload the search results.
+RELOAD="reload:($RGCMD & $FDCMD)|| :"
+
+#OPENER='if [[ $FZF_SELECT_COUNT -eq 0 ]]; then
+#            nvim {1} +{2}     # No selection. Open the current line in Vim.
+#          else
+#            nvim +cw -q {+f}  # Build quickfix list for the selected items.
+#          fi'
+
+  OPENER='nvim {1} +{2} +"set foldlevel=999" -c "/$FZF_QUERY"' # Open the selected line in NeoVim.
+
+  OBSIDIAN='result=$(echo {1} | cut -c 3-) && open "obsidian://open?vault=notes&file=$result"'
+
+  CREATOR='nvim "$FZF_QUERY".md -c "normal i$(echo -e \# $FZF_QUERY)" -c "normal Go" -c "normal Go" -c "startinsert"'
+
+  PREVIEW='bat --theme=base16-256 --style=plain --wrap=character --terminal-width=160 --color=always --highlight-line {2} {1}'
+
+  FZF_DEFAULT_OPTS='--color=bg+:#3B4252,bg:#2E3440,spinner:#81A1C1,hl:#616E88,fg:#D8DEE9,header:#616E88,info:#81A1C1,pointer:#81A1C1,marker:#81A1C1,fg+:#D8DEE9,prompt:#81A1C1,hl+:#81A1C1'
+
+  fzf --disabled --ansi \
+      --prompt="➙ " \
+      --bind "start:$RELOAD" --bind "change:$RELOAD" \
+      --bind "enter:become:$OPENER" \
+      --bind "ctrl-o:become:$OBSIDIAN" \
+      --bind "ctrl-a:become:$CREATOR" \
+      --preview "$PREVIEW" \
+      --preview-window '~4,+{2}+4/3,<80(bottom)' \
+      --preview-label='[ Preview ]' \
+      --preview-label-pos=bottom \
+      --prompt='  🧠🔍 ▶  ' --pointer='→' --marker='♡' --header='🔍' \
+      --header="         <ENTER>: nvim, <C-O>: Obsidian, <C-A>: create, <ESC>/<C-C>: quit" \
+      --delimiter : \
+      --info=hidden \
+      --height=100% \
+      --print-query
+
+
+
+
