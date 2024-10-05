@@ -1,0 +1,45 @@
+#!/bin/env bash
+
+# Supporting script for Votational Nelocity:
+#
+# It finds all markdown files - across the file system - and creates symbolic links to each of them
+# in another folder. Note that the symbolic links won't have the same name as the original files,
+# so that two links with the same name don't overwrite each other.
+#
+# Oct 2024, Michele Giugliano
+
+# The source folder
+src_folder="$HOME/Dropbox"
+
+# The destination folder
+dest_folder="$NOTES/mdlinks"
+# Create the destination folder if it doesn't exist
+mkdir -p "$dest_folder"
+# Delete all symbolic links in the destination folder
+find "$dest_folder" -type l -delete
+
+
+# Excluded folders: a list of folders that should be excluded from the search
+# example: excluded_folders="folder1 folder2 folder3"
+excluded_folders=""
+
+# Add -E for each element in the excluded_folders list
+excluded_folders_option=$(echo "$excluded_folders" | tr '\n' ' ' | xargs -n1 echo -E | xargs)
+excluded_folders_option="-E $excluded_folders_option"
+
+
+# Find all markdown files in the source folder
+fd -tf -u $excluded_folders_option --glob '*.md' "$src_folder" | while read -r file; do
+  # If a link with the same name already exists,  add a suffix to its name
+    if [ -e "$dest_folder/$(basename "$file")" ]; then
+        #echo "!! File exists: $file"
+        hash=$(sha1sum "$file" | awk '{print $1}' | cut -c -5)
+        salt=$(shuf -i 0-100000 -n 1)
+        #echo "adding prefix: $salt-$hash"
+        ln -s "$file" "$dest_folder/$salt$hash$(basename "$file")"
+    else
+        # Otherwise, create the link
+        ln -s "$file" "$dest_folder/$(basename "$file")"
+    fi
+done
+
