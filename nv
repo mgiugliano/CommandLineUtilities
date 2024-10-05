@@ -22,7 +22,7 @@ FDCMD="fd -e md --ignore --type file {q} '$SEARCHPATH' | sed 's/$/:1:1:/' | sort
 
 # ripgrep: searches in $SEARCHPATH for files whose content matches the search string. We only consider *.md and *.txt files.
 # and returns the filename with a trailing colon and the exact line and column numbers (for fzf preview)
-RGCMD="rg -tmd --column --smart-case --color=always --sort=accessed --line-buffered {q} '$SEARCHPATH'"
+RGCMD="rg -tmd --column --smart-case --color=always --sort=accessed --follow --line-buffered {q} '$SEARCHPATH'"
 #-------------------------------------------------------------------------------------------------------------------------
 
 # Commands to be executed when the search string changes or when the user presses 'CTRL-R' to reload the search results.

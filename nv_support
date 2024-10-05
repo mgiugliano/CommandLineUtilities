@@ -13,33 +13,76 @@ src_folder="$HOME/Dropbox"
 
 # The destination folder
 dest_folder="$NOTES/mdlinks"
+
 # Create the destination folder if it doesn't exist
 mkdir -p "$dest_folder"
+
+echo "Source folder:      $src_folder"
+echo "Destination folder: $dest_folder"
+
 # Delete all symbolic links in the destination folder
 find "$dest_folder" -type l -delete
 
+echo "Creating symbolic links to all markdown files in $src_folder.."
+#-------------------------------------------------------------------------
+# Let's use the global ignore file for fd, to exclude some folders and files
+# This is useful to avoid searching in folders that are not relevant
+# for example, folders containing backups.
 
-# Excluded folders: a list of folders that should be excluded from the search
-# example: excluded_folders="folder1 folder2 folder3"
-excluded_folders=""
+# Let's create a local .ignore file for fd, unless it already exists
+mkdir -p $HOME/.config/fd
 
-# Add -E for each element in the excluded_folders list
-excluded_folders_option=$(echo "$excluded_folders" | tr '\n' ' ' | xargs -n1 echo -E | xargs)
-excluded_folders_option="-E $excluded_folders_option"
+# Let's delete the local .ignore backup, if it already exists
+rm -f $HOME/.config/fd/ignore.bak
 
+# Let's backup the original (global) .ignore file of fd
+cp $HOME/.config/fd/ignore $HOME/.config/fd/ignore.bak
 
-# Find all markdown files in the source folder
-fd -tf -u $excluded_folders_option --glob '*.md' "$src_folder" | while read -r file; do
+# Let's now create a brand new .ignore file for fd (for the current script)
+echo "# The excluded folders and files" > "$HOME/.config/fd/ignore"
+
+# The excluded folders and files
+echo "$src_folder/sublime_backups/*" > "$HOME/.config/fd/ignore"
+echo "$src_folder/Apps/Joplin" >> "$HOME/.config/fd/ignore"
+echo "$src_folder/Pvt/Letters/PanDocLetters" >> "$HOME/.config/fd/ignore"
+echo "$src_folder/Pvt/PROJECTS/LIBRO_PENSIERO" >> "$HOME/.config/fd/ignore"
+echo "$src_folder/Pvt/OLDER" >> "$HOME/.config/fd/ignore"
+echo "$src_folder/Pro/PUBLISHED" >> "$HOME/.config/fd/ignore"
+
+# The excluded files (wherever they are)
+echo "LICENSE.md" >> "$HOME/.config/fd/ignore"
+echo "README.md" >> "$HOME/.config/fd/ignore"
+echo "CHANGES.md" >> "$HOME/.config/fd/ignore"
+echo "CONTRIBUTING.md" >> "$HOME/.config/fd/ignore"
+echo "AUTHORS.md" >> "$HOME/.config/fd/ignore"
+echo "SECURITY.md" >> "$HOME/.config/fd/ignore"
+echo "CHANGELOG.md" >> "$HOME/.config/fd/ignore"
+echo "HISTORY.md" >> "$HOME/.config/fd/ignore"
+echo "BACKERS.md" >> "$HOME/.config/fd/ignore"
+#-------------------------------------------------------------------------
+
+echo "Starting the search and link operation.."
+
+# Now, find all markdown files in the source folder... and link them in the destination folder
+fd --case-sensitive --type file  --glob '*.md' "$src_folder" | while read -r file; do
+    #echo "File: $file"
   # If a link with the same name already exists,  add a suffix to its name
     if [ -e "$dest_folder/$(basename "$file")" ]; then
+        echo -n "◯"
         #echo "!! File exists: $file"
         hash=$(sha1sum "$file" | awk '{print $1}' | cut -c -5)
         salt=$(shuf -i 0-100000 -n 1)
         #echo "adding prefix: $salt-$hash"
-        ln -s "$file" "$dest_folder/$salt$hash$(basename "$file")"
+        ln -s "$file" "$dest_folder/$salt$hash__$(basename "$file")"
     else
+        echo -n "●"
         # Otherwise, create the link
         ln -s "$file" "$dest_folder/$(basename "$file")"
     fi
 done
 
+# Restore the original (global) .ignore file of fd
+mv $HOME/.config/fd/ignore.bak $HOME/.config/fd/ignore
+
+echo "Done!"
+# Done
