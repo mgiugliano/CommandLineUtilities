@@ -33,6 +33,9 @@ $EDITOR is currently not yet used by nv (with [NeoVim](https://neovim.io) used a
 export NOTES="/Users/MYUSERNAME/Library/Mobile Documents/iCloud~md~obsidian/Documents/notes"
 ```
 
+Launching every few hours, automatically, the nv_support script makes possible to have (as symbolic links) all markdown files outside the $NOTES folder. The ripgrep's option for following symbolic links has been activated.
+In this way, any notes or document in (e.g.) project folders not explicitly planned or saved as one entry in the $NOTES folder.
+
 ### How to use it (tested under macOs)
 
 Invoking `nv` from the command line (or pressing cmd+p if using a shortcut) will open the fzf interface. Every time the search field is updated a new search is launched, combining filenames and text content of the files contained in $NOTES and its subfolders. Using Control-j and Control-k one can select across multiple hits in the upper part of the window, while having the preview (with syntax highlighting) in the lower part of the window.
