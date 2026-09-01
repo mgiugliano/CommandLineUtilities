@@ -84,6 +84,8 @@ blog                   Show help + status (default, no args)
 blog new [title]       Draft a new post in content/posts/
 blog edit [query]      Fuzzy-pick a post (fzf), open in $EDITOR, then tag it
 blog tags [query]      Fuzzy-pick a post, then just do the tag step
+blog thumbnail [query] Fuzzy-pick a post and fetch a thumbnail for it
+                       from Wikimedia Commons (thumb, image)
 blog delete [query]    Fuzzy-pick a post and delete it (rm, remove) --
                        pushes the removal live too, if it was published
 blog status            List posts not yet committed/pushed (check, pending)
@@ -98,6 +100,8 @@ blog help                Show this help only
 `blog delete` removes the post locally right away (`git rm`, not `git rm --cached` — the file is gone from disk immediately, whether or not you ever push); if the post was already live, it separately asks before pushing that removal out to the real site.
 
 `blog push` builds the site locally first (so a broken post never gets committed), proposes a commit message from the post title(s), and asks for confirmation before it actually pushes. Editing an already-published post's `.md` file directly — through `blog edit` or by hand — flips its status from `published` to `modified`; the next `blog push` picks it up and re-syncs the live copy.
+
+`blog thumbnail` searches [Wikimedia Commons](https://commons.wikimedia.org/) (free, no API key, CC-licensed) using the post's title as the default search term — editable before searching, same pre-filled-prompt pattern as tags. It shows up to 8 candidates with license, artist, and a Commons URL to preview in a browser first; nothing is ever auto-picked. CC0/Public-Domain results are sorted first, since those need no attribution. Picking one downloads it into `static/images/{slug}-thumb.{ext}`, sets `thumbnail:` in the post's front matter (which the card-grid generator in `build.sh` already looks for — no wiring needed), and records the source/license/artist as an HTML comment in the post. If you pick a CC-BY/CC-BY-SA image instead, it warns you: that comment is a paper trail, not a substitute for the *visible* attribution those licenses actually require once published.
 
 ### Assumptions about the target repo
 

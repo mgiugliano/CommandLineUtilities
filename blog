@@ -184,6 +184,52 @@ with open(file_path, 'w', encoding='utf-8') as f:
 PYEOF
 }
 
+# Set/replace a post's `thumbnail:` front-matter field.
+apply_thumbnail_field() {
+  local file="$1" thumb_path="$2"
+  python3 - "$file" "$thumb_path" << 'PYEOF'
+import sys, re
+file_path, thumb_path = sys.argv[1], sys.argv[2]
+with open(file_path, encoding='utf-8') as f:
+    content = f.read()
+if content.startswith('---'):
+    parts = content.split('---', 2)
+    if len(parts) >= 3:
+        front = parts[1]
+        if re.search(r'(?m)^thumbnail:.*$', front):
+            front = re.sub(r'(?m)^thumbnail:.*$', f'thumbnail: {thumb_path}', front, count=1)
+        else:
+            front = front.rstrip('\n') + f'\nthumbnail: {thumb_path}\n'
+        content = '---' + front + '---' + parts[2]
+with open(file_path, 'w', encoding='utf-8') as f:
+    f.write(content)
+PYEOF
+}
+
+# Record where a fetched thumbnail came from as an HTML comment right after
+# the front matter — invisible when rendered, kept in source as a paper
+# trail. Does NOT by itself satisfy a CC-BY/CC-BY-SA license's requirement
+# for visible attribution; see the caller's warning for that.
+add_image_credit() {
+  local file="$1" page_url="$2" license="$3" artist="$4"
+  python3 - "$file" "$page_url" "$license" "$artist" << 'PYEOF'
+import sys
+file_path, page_url, license_, artist = sys.argv[1:5]
+with open(file_path, encoding='utf-8') as f:
+    content = f.read()
+credit = f'<!-- Thumbnail source: {page_url} ({license_}'
+if artist:
+    credit += f', by {artist}'
+credit += ') -->\n'
+if content.startswith('---'):
+    parts = content.split('---', 2)
+    if len(parts) >= 3:
+        content = '---' + parts[1] + '---\n' + credit + parts[2].lstrip('\n')
+with open(file_path, 'w', encoding='utf-8') as f:
+    f.write(content)
+PYEOF
+}
+
 # Tag a post: `apfel` (Apple's on-device model) prints a quick hint, then the
 # user is dropped into a single editable prompt pre-filled with that hint
 # (or the post's current tags) — press Enter to accept it as-is, or edit
@@ -372,6 +418,163 @@ cmd_tags() {
   suggest_tags_for "$file"
 }
 
+# Search Wikimedia Commons (free, no API key, CC-licensed) for a post's
+# thumbnail, download the pick into static/images/, and set thumbnail: in
+# its front matter. Nothing is auto-picked — you always choose from a list.
+cmd_thumbnail() {
+  local file
+  file="$(resolve_post "$*")"
+  if [ -z "$file" ]; then
+    echo "No post selected."
+    return 0
+  fi
+
+  local title slug results_file
+  title="$(post_title "$file")"
+  slug="$(basename "$file" .md)"
+  results_file="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$results_file'" RETURN
+
+  local pick="" count=0
+  while true; do
+    local search=""
+    read -e -i "$title" -rp "Search Wikimedia Commons for: " search || true
+    if [ -z "$search" ]; then
+      echo "Cancelled."
+      return 0
+    fi
+
+    echo "🔎 Searching Wikimedia Commons for \"$search\"..."
+    if ! python3 - "$search" "$results_file" << 'PYEOF'
+import sys, json, re, urllib.request, urllib.parse
+
+query, out_path = sys.argv[1], sys.argv[2]
+base = "https://commons.wikimedia.org/w/api.php"
+
+def api_get(params):
+    url = base + "?" + urllib.parse.urlencode(params) + "&format=json"
+    req = urllib.request.Request(url, headers={"User-Agent": "blog-cli/1.0 (personal blog tool)"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.load(resp)
+
+results = []
+search_data = api_get({
+    "action": "query", "list": "search",
+    "srsearch": query, "srnamespace": "6", "srlimit": "8",
+})
+titles = [r["title"] for r in search_data.get("query", {}).get("search", [])]
+if titles:
+    info_data = api_get({
+        "action": "query", "titles": "|".join(titles),
+        "prop": "imageinfo", "iiprop": "url|extmetadata", "iiurlwidth": "800",
+    })
+    pages = info_data.get("query", {}).get("pages", {})
+    for t in titles:
+        page = next((p for p in pages.values() if p.get("title") == t), None)
+        if not page or "imageinfo" not in page:
+            continue
+        info = page["imageinfo"][0]
+        meta = info.get("extmetadata", {})
+        license_short = meta.get("LicenseShortName", {}).get("value", "unknown")
+        artist = re.sub(r'<[^>]+>', '', meta.get("Artist", {}).get("value", "")).strip()
+        results.append({
+            "title": t.replace("File:", ""),
+            "thumb": info.get("thumburl") or info.get("url", ""),
+            "page": info.get("descriptionurl", ""),
+            "license": license_short,
+            "artist": artist,
+        })
+# CC0 / public domain first — no attribution obligation
+results.sort(key=lambda r: 0 if 'cc0' in r["license"].lower() or 'public domain' in r["license"].lower() else 1)
+with open(out_path, 'w', encoding='utf-8') as f:
+    json.dump(results, f)
+PYEOF
+    then
+      echo "⚠️  Search request failed — check your connection and try again."
+      continue
+    fi
+
+    count="$(python3 -c "import json; print(len(json.load(open('$results_file'))))")"
+    if [ "$count" = "0" ]; then
+      echo "No results — try different search terms."
+      continue
+    fi
+
+    echo ""
+    python3 -c "
+import json
+for i, r in enumerate(json.load(open('$results_file')), 1):
+    artist = f' — {r[\"artist\"]}' if r['artist'] else ''
+    print(f'  {i}) [{r[\"license\"]}]{artist}  {r[\"title\"]}')
+    print(f'     {r[\"page\"]}')
+"
+    echo ""
+    read -rp "Pick a number to use (open the URL above to preview first), 'r' to search again, or Enter to cancel: " pick || true
+
+    case "$pick" in
+      "") echo "Cancelled."; return 0 ;;
+      r|R) continue ;;
+      *[!0-9]*) echo "Invalid choice."; continue ;;
+      *)
+        if [ "$pick" -lt 1 ] || [ "$pick" -gt "$count" ]; then
+          echo "Invalid choice."
+          continue
+        fi
+        break
+        ;;
+    esac
+  done
+
+  echo "⬇️  Downloading..."
+  local download_result
+  download_result="$(python3 - "$results_file" "$pick" "static/images" "$slug" << 'PYEOF'
+import sys, json, urllib.request
+from urllib.parse import urlparse
+
+results_path, pick, img_dir, slug = sys.argv[1], int(sys.argv[2]) - 1, sys.argv[3], sys.argv[4]
+r = json.load(open(results_path))[pick]
+
+# Extension from the URL *path* only -- the query string (tracking params
+# like utm_source=commons.wikimedia.org) has dots of its own and will
+# mislead a naive rsplit('.') on the full URL.
+path_only = urlparse(r['thumb']).path
+ext = path_only.rsplit('.', 1)[-1].lower() if '.' in path_only else ''
+if len(ext) > 4 or not ext.isalnum():
+    ext = 'jpg'
+dest_rel = f'{img_dir}/{slug}-thumb.{ext}'
+
+req = urllib.request.Request(r['thumb'], headers={'User-Agent': 'blog-cli/1.0'})
+with urllib.request.urlopen(req, timeout=30) as resp:
+    data = resp.read()
+with open(dest_rel, 'wb') as f:
+    f.write(data)
+
+print('\t'.join([dest_rel, r['license'], r['artist'], r['page'], r['title']]))
+PYEOF
+)"
+  if [ -z "$download_result" ]; then
+    echo "❌ Download failed." >&2
+    return 1
+  fi
+
+  local dest_rel img_license img_artist img_page img_title
+  IFS=$'\t' read -r dest_rel img_license img_artist img_page img_title <<< "$download_result"
+
+  apply_thumbnail_field "$file" "/$dest_rel"
+  add_image_credit "$file" "$img_page" "$img_license" "$img_artist"
+
+  echo "✓ Saved $dest_rel and set thumbnail: in $(basename "$file")"
+  case "$(printf '%s' "$img_license" | tr '[:upper:]' '[:lower:]')" in
+    *cc0*|*public\ domain*) : ;;
+    *)
+      echo "⚠️  This image is \"$img_license\" — that license requires visible"
+      echo "   attribution when published, not just the HTML comment I added."
+      echo "   Consider a visible credit line, or pick a CC0/Public Domain result instead."
+      ;;
+  esac
+}
+
 cmd_status() {
   echo "🔎 Checking $POSTS_DIR against origin/main..."
   git fetch --quiet origin main 2>/dev/null \
@@ -550,9 +753,11 @@ Usage:
   blog new [title]        Draft a new post in $POSTS_DIR/
   blog edit [query]        Fuzzy-pick a post (fzf), edit in \$EDITOR, then tag it
   blog tags [query]        Fuzzy-pick a post and just do the tag step
-  blog delete [query]       Fuzzy-pick a post and delete it (rm, remove) —
-                             pushes the removal live too, if it was published
-  blog status               List posts not yet committed/pushed  (check, pending)
+  blog thumbnail [query]    Fuzzy-pick a post and fetch a thumbnail for it
+                             from Wikimedia Commons (thumb, image)
+  blog delete [query]        Fuzzy-pick a post and delete it (rm, remove) —
+                              pushes the removal live too, if it was published
+  blog status                List posts not yet committed/pushed  (check, pending)
   blog push                  Build, commit, and push pending posts (publish)
   blog help                   Show this help only
 
@@ -566,6 +771,7 @@ case "${1:-__default__}" in
   new) shift; cmd_new "$@" ;;
   edit) shift; cmd_edit "$@" ;;
   tags) shift; cmd_tags "$@" ;;
+  thumbnail|thumb|image) shift; cmd_thumbnail "$@" ;;
   delete|rm|remove) shift; cmd_delete "$@" ;;
   status|check|pending) cmd_status ;;
   push|publish) cmd_push ;;
