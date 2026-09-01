@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# blog — manage posts for a Pandoc-based blog (originally written for
-# blog.giugliano.info / mgiugliano.github.io — see README for the repo
+# blog — manage posts for a Pandoc-based blog (see README for the repo
 # layout it assumes).
 #
 # Usage:
