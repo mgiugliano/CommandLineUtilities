@@ -88,8 +88,8 @@ blog thumbnail [query] Fuzzy-pick a post and fetch a thumbnail for it
                        from Wikimedia Commons (thumb, image)
 blog delete [query]    Fuzzy-pick a post and delete it (rm, remove) --
                        pushes the removal live too, if it was published
-blog status            List posts not yet committed/pushed (check, pending)
-blog push               Build, commit, and push pending posts   (publish)
+blog status            List posts/images not yet committed/pushed (check, pending)
+blog push               Build, commit, and push pending posts+images (publish)
 blog help                Show this help only
 ```
 
@@ -99,9 +99,9 @@ blog help                Show this help only
 
 `blog delete` removes the post locally right away (`git rm`, not `git rm --cached` — the file is gone from disk immediately, whether or not you ever push); if the post was already live, it separately asks before pushing that removal out to the real site.
 
-`blog push` builds the site locally first (so a broken post never gets committed), proposes a commit message from the post title(s), and asks for confirmation before it actually pushes. Editing an already-published post's `.md` file directly — through `blog edit` or by hand — flips its status from `published` to `modified`; the next `blog push` picks it up and re-syncs the live copy.
+`blog status`/`blog push` track `static/images/` alongside `content/posts/`, not just posts — a `thumbnail:` fetched via `blog thumbnail` is only half-published if the image file itself never gets committed, so both commands catch and stage it right along with the post. `blog push` builds the site locally first (so a broken post never gets committed), proposes a commit message from the post title(s) — or "Update images" if only images changed — and asks for confirmation before it actually pushes. Editing an already-published post's `.md` file directly — through `blog edit` or by hand — flips its status from `published` to `modified`; the next `blog push` picks it up and re-syncs the live copy.
 
-`blog thumbnail` searches [Wikimedia Commons](https://commons.wikimedia.org/) (free, no API key, CC-licensed) using the post's title as the default search term — editable before searching, same pre-filled-prompt pattern as tags. It shows up to 8 candidates with license, artist, and a Commons URL to preview in a browser first; nothing is ever auto-picked. CC0/Public-Domain results are sorted first, since those need no attribution. Picking one downloads it into `static/images/{slug}-thumb.{ext}`, sets `thumbnail:` in the post's front matter (which the card-grid generator in `build.sh` already looks for — no wiring needed), and records the source/license/artist as an HTML comment in the post. If you pick a CC-BY/CC-BY-SA image instead, it warns you: that comment is a paper trail, not a substitute for the *visible* attribution those licenses actually require once published.
+`blog thumbnail` searches [Wikimedia Commons](https://commons.wikimedia.org/) (free, no API key, CC-licensed, restricted to actual images — not the PDFs/audio/video that also live in its File namespace) using the post's title as the default search term — editable before searching, same pre-filled-prompt pattern as tags. It shows up to 8 candidates with license, artist, and a Commons URL to preview in a browser first; nothing is ever auto-picked. CC0/Public-Domain results are sorted first, since those need no attribution. Picking one downloads it into `static/images/{slug}-thumb.{ext}`, sets `thumbnail:` in the post's front matter (which the card-grid generator in `build.sh` already looks for — no wiring needed), and records title/source/license/artist as an HTML comment that `build.sh` renders as a small, muted, visible credit line on the post page — real attribution, not just a hidden comment. If you pick a CC-BY/CC-BY-SA image instead, it still warns you: the credit only shows on the post page, not next to the thumbnail itself on the blog list, so a CC0/Public-Domain pick remains the zero-obligation choice.
 
 ### Assumptions about the target repo
 

@@ -43,6 +43,7 @@ set -euo pipefail
 
 REPO="${BLOG_REPO:?Set BLOG_REPO to the path of your blog repo working copy}"
 POSTS_DIR="content/posts"
+ASSETS_DIR="static/images"
 SITE_URL="${BLOG_SITE_URL:-}"
 APFEL_SCHEMA="${BLOG_TAG_SCHEMA:-$HOME/.bin/blog-tags.schema.json}"
 
@@ -207,17 +208,17 @@ PYEOF
 }
 
 # Record where a fetched thumbnail came from as an HTML comment right after
-# the front matter — invisible when rendered, kept in source as a paper
-# trail. Does NOT by itself satisfy a CC-BY/CC-BY-SA license's requirement
-# for visible attribution; see the caller's warning for that.
+# the front matter, in a format build.sh's thumbnail_credit_html_for()
+# parses to render a small, muted, visible credit line on the post page
+# (Title/Author/Source/License — the standard CC attribution shape).
 add_image_credit() {
-  local file="$1" page_url="$2" license="$3" artist="$4"
-  python3 - "$file" "$page_url" "$license" "$artist" << 'PYEOF'
+  local file="$1" page_url="$2" license="$3" artist="$4" title="$5"
+  python3 - "$file" "$page_url" "$license" "$artist" "$title" << 'PYEOF'
 import sys
-file_path, page_url, license_, artist = sys.argv[1:5]
+file_path, page_url, license_, artist, title = sys.argv[1:6]
 with open(file_path, encoding='utf-8') as f:
     content = f.read()
-credit = f'<!-- Thumbnail source: {page_url} ({license_}'
+credit = f'<!-- Thumbnail credit: "{title}" via {page_url} ({license_}'
 if artist:
     credit += f', by {artist}'
 credit += ') -->\n'
@@ -458,10 +459,16 @@ def api_get(params):
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.load(resp)
 
+IMAGE_EXTS = {"jpg", "jpeg", "png", "gif", "webp", "svg", "tif", "tiff", "bmp"}
+
 results = []
+# The File namespace holds every upload (PDFs, audio, video, ...), not just
+# images -- filetype:bitmap|drawing restricts the search itself to raster
+# and vector images; the extension check below is a second, independent
+# safety net in case that keyword ever stops being honored.
 search_data = api_get({
     "action": "query", "list": "search",
-    "srsearch": query, "srnamespace": "6", "srlimit": "8",
+    "srsearch": f"{query} filetype:bitmap|drawing", "srnamespace": "6", "srlimit": "8",
 })
 titles = [r["title"] for r in search_data.get("query", {}).get("search", [])]
 if titles:
@@ -471,6 +478,8 @@ if titles:
     })
     pages = info_data.get("query", {}).get("pages", {})
     for t in titles:
+        if t.rsplit('.', 1)[-1].lower() not in IMAGE_EXTS:
+            continue
         page = next((p for p in pages.values() if p.get("title") == t), None)
         if not page or "imageinfo" not in page:
             continue
@@ -562,33 +571,34 @@ PYEOF
   IFS=$'\t' read -r dest_rel img_license img_artist img_page img_title <<< "$download_result"
 
   apply_thumbnail_field "$file" "/$dest_rel"
-  add_image_credit "$file" "$img_page" "$img_license" "$img_artist"
+  add_image_credit "$file" "$img_page" "$img_license" "$img_artist" "$img_title"
 
   echo "✓ Saved $dest_rel and set thumbnail: in $(basename "$file")"
   case "$(printf '%s' "$img_license" | tr '[:upper:]' '[:lower:]')" in
     *cc0*|*public\ domain*) : ;;
     *)
-      echo "⚠️  This image is \"$img_license\" — that license requires visible"
-      echo "   attribution when published, not just the HTML comment I added."
-      echo "   Consider a visible credit line, or pick a CC0/Public Domain result instead."
+      echo "⚠️  This image is \"$img_license\" — that license requires attribution."
+      echo "   build.sh renders a visible credit line on the post page automatically,"
+      echo "   but only there, not next to the thumbnail itself on the blog list."
+      echo "   For no attribution obligation at all, pick a CC0/Public Domain result instead."
       ;;
   esac
 }
 
 cmd_status() {
-  echo "🔎 Checking $POSTS_DIR against origin/main..."
+  echo "🔎 Checking $POSTS_DIR and $ASSETS_DIR against origin/main..."
   git fetch --quiet origin main 2>/dev/null \
     || echo "⚠️  Could not reach GitHub — 'unpushed commit' status may be stale."
 
   local untracked modified unpushed pending
-  untracked="$(git ls-files --others --exclude-standard -- "$POSTS_DIR" 2>/dev/null || true)"
-  modified="$( { git diff --name-only -- "$POSTS_DIR"; git diff --cached --name-only -- "$POSTS_DIR"; } 2>/dev/null | sort -u)"
-  unpushed="$(git log origin/main..HEAD --name-only --pretty=format: -- "$POSTS_DIR" 2>/dev/null | sed '/^$/d' | sort -u)"
+  untracked="$(git ls-files --others --exclude-standard -- "$POSTS_DIR" "$ASSETS_DIR" 2>/dev/null || true)"
+  modified="$( { git diff --name-only -- "$POSTS_DIR" "$ASSETS_DIR"; git diff --cached --name-only -- "$POSTS_DIR" "$ASSETS_DIR"; } 2>/dev/null | sort -u)"
+  unpushed="$(git log origin/main..HEAD --name-only --pretty=format: -- "$POSTS_DIR" "$ASSETS_DIR" 2>/dev/null | sed '/^$/d' | sort -u)"
 
   pending="$(printf '%s\n%s\n%s\n' "$untracked" "$modified" "$unpushed" | sed '/^$/d' | sort -u)"
 
   if [ -z "$pending" ]; then
-    echo "✅ Everything in $POSTS_DIR is committed and pushed."
+    echo "✅ Everything in $POSTS_DIR and $ASSETS_DIR is committed and pushed."
     return 0
   fi
 
@@ -604,8 +614,10 @@ cmd_status() {
     else
       status="unpushed"
     fi
-    title="$(post_title "$f")"
-    [ -z "$title" ] && title="?"
+    case "$f" in
+      *.md) title="$(post_title "$f")"; [ -z "$title" ] && title="?" ;;
+      *)    title="(image asset)" ;;
+    esac
     printf '%-52s %-10s %s\n' "$f" "$status" "$title"
   done <<< "$pending"
 }
@@ -615,8 +627,8 @@ cmd_push() {
   echo ""
 
   local staged_files ahead
-  staged_files="$(git status --porcelain -- "$POSTS_DIR" 2>/dev/null | awk '{print $2}')"
-  ahead="$(git log origin/main..HEAD --name-only --pretty=format: -- "$POSTS_DIR" 2>/dev/null | sed '/^$/d')"
+  staged_files="$(git status --porcelain -- "$POSTS_DIR" "$ASSETS_DIR" 2>/dev/null | awk '{print $2}')"
+  ahead="$(git log origin/main..HEAD --name-only --pretty=format: -- "$POSTS_DIR" "$ASSETS_DIR" 2>/dev/null | sed '/^$/d')"
 
   if [ -z "$staged_files" ] && [ -z "$ahead" ]; then
     echo "Nothing to push."
@@ -634,10 +646,16 @@ cmd_push() {
     # shellcheck disable=SC2086
     git add $staged_files
 
-    local titles msg count
-    titles="$(for f in $staged_files; do post_title "$f"; done | paste -sd, -)"
-    count="$(printf '%s\n' "$staged_files" | sed '/^$/d' | wc -l | tr -d ' ')"
-    if [ "$count" = "1" ]; then
+    # Commit message is built from the posts only -- an image with no
+    # matching post change (unlikely, but possible) shouldn't count toward
+    # "how many posts" or show up titleless in the message.
+    local staged_posts titles msg count
+    staged_posts="$(printf '%s\n' "$staged_files" | grep '\.md$' || true)"
+    titles="$(for f in $staged_posts; do t="$(post_title "$f")"; [ -n "$t" ] && echo "$t"; done | paste -sd, -)"
+    count="$(printf '%s\n' "$staged_posts" | sed '/^$/d' | wc -l | tr -d ' ')"
+    if [ "$count" = "0" ]; then
+      msg="Update images"
+    elif [ "$count" = "1" ]; then
       msg="Publish post: ${titles}"
     else
       msg="Publish posts: ${titles}"
