@@ -84,14 +84,20 @@ blog                   Show help + status (default, no args)
 blog new [title]       Draft a new post in content/posts/
 blog edit [query]      Fuzzy-pick a post (fzf), open in $EDITOR, then tag it
 blog tags [query]      Fuzzy-pick a post, then just do the tag step
+blog delete [query]    Fuzzy-pick a post and delete it (rm, remove) --
+                       pushes the removal live too, if it was published
 blog status            List posts not yet committed/pushed (check, pending)
 blog push               Build, commit, and push pending posts   (publish)
 blog help                Show this help only
 ```
 
-`blog edit`/`blog tags` fuzzy-find a post by filename or title (fzf, with a `bat`-rendered markdown preview), open it in `$EDITOR`, then help with tags: [apfel](https://apfel.franzai.com) — Apple Intelligence's on-device model, from the command line — reads the post plus the blog's existing tag vocabulary and prints a quick hint, then you land on one editable prompt pre-filled with that hint (or the post's current tags): press Enter to accept it as-is, or edit the line first. No fuzzy finder for the tags themselves — they aren't files, there's nothing meaningful to preview, and a plain editable line makes "accept the model's proposal" a plain Enter instead of a multi-step picker.
+`blog edit`/`blog tags`/`blog delete` fuzzy-find a post by filename or title (fzf, with a `bat`-rendered markdown preview) — every entry is tagged with its status (`untracked`, `modified`, `unpushed`, `published`) so it's clear which posts are already live before you touch one.
 
-`blog push` builds the site locally first (so a broken post never gets committed), proposes a commit message from the post title(s), and asks for confirmation before it actually pushes.
+`blog edit` opens the pick in `$EDITOR`, then helps with tags: [apfel](https://apfel.franzai.com) — Apple Intelligence's on-device model, from the command line — reads the post plus the blog's existing tag vocabulary and prints a quick hint, then you land on one editable prompt pre-filled with that hint (or the post's current tags): press Enter to accept it as-is, or edit the line first. No fuzzy finder for the tags themselves — they aren't files, there's nothing meaningful to preview, and a plain editable line makes "accept the model's proposal" a plain Enter instead of a multi-step picker.
+
+`blog delete` removes the post locally right away (`git rm`, not `git rm --cached` — the file is gone from disk immediately, whether or not you ever push); if the post was already live, it separately asks before pushing that removal out to the real site.
+
+`blog push` builds the site locally first (so a broken post never gets committed), proposes a commit message from the post title(s), and asks for confirmation before it actually pushes. Editing an already-published post's `.md` file directly — through `blog edit` or by hand — flips its status from `published` to `modified`; the next `blog push` picks it up and re-syncs the live copy.
 
 ### Assumptions about the target repo
 

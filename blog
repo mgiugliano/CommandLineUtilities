@@ -9,9 +9,15 @@
 #   blog edit [query]      Fuzzy-pick a post (fzf), open in $EDITOR, then
 #                           tag it
 #   blog tags [query]      Fuzzy-pick a post, then just do the tag step
+#   blog delete [query]    Fuzzy-pick a post and delete it (rm, remove) --
+#                          pushes the removal live too, if it was published
 #   blog status            List posts not yet committed/pushed (check, pending)
 #   blog push               Build, commit, and push pending posts   (publish)
 #   blog help                Show this help only
+#
+# The post picker (edit/tags/delete) tags every entry with its status --
+# untracked, modified, unpushed, or published -- so it's clear which posts
+# are already live before you touch one.
 #
 # Tagging: `apfel` (Apple Intelligence from the command line — the on-device
 # Foundation Models framework, https://apfel.franzai.com) reads the post and
@@ -66,6 +72,22 @@ post_title() {
   printf '%s' "$line"
 }
 
+# Classify one post's publish status against origin/main:
+#   untracked | modified | unpushed | published
+post_status() {
+  local f="$1"
+  if [ -n "$(git ls-files --others --exclude-standard -- "$f" 2>/dev/null)" ]; then
+    echo "untracked"; return 0
+  fi
+  if [ -n "$(git diff --name-only -- "$f" 2>/dev/null)$(git diff --cached --name-only -- "$f" 2>/dev/null)" ]; then
+    echo "modified"; return 0
+  fi
+  if [ -n "$(git log origin/main..HEAD --name-only --pretty=format: -- "$f" 2>/dev/null)" ]; then
+    echo "unpushed"; return 0
+  fi
+  echo "published"
+}
+
 # Pick a post file: exact path/filename bypasses the picker; otherwise fuzzy-
 # select with fzf (pre-filled with $1 as the query), falling back to a plain
 # numbered prompt if fzf isn't installed. Prints the chosen path, or nothing.
@@ -87,7 +109,7 @@ resolve_post() {
     local chosen=""
     chosen="$(
       while IFS= read -r f; do
-        printf '%s\t%s  —  %s\n' "$f" "$(basename "$f")" "$(post_title "$f")"
+        printf '%s\t[%-9s] %s  —  %s\n' "$f" "$(post_status "$f")" "$(basename "$f")" "$(post_title "$f")"
       done <<< "$files" \
       | fzf --delimiter='\t' --with-nth=2 \
             --prompt="Post> " --query="$query" \
@@ -120,7 +142,7 @@ resolve_post() {
   echo "Multiple matches — install 'fzf' for a picker, or narrow your query:" >&2
   local i=1
   while IFS= read -r f; do
-    printf '  %d) %-45s %s\n' "$i" "$(basename "$f")" "$(post_title "$f")" >&2
+    printf '  %d) [%-9s] %-45s %s\n' "$i" "$(post_status "$f")" "$(basename "$f")" "$(post_title "$f")" >&2
     i=$((i+1))
   done <<< "$matches"
   local pick=""
@@ -276,6 +298,12 @@ tags:
 ---
 
 Write your opening paragraph here.
+EOF
+
+  # Separate, quoted (literal) heredoc for the reminder block — it contains
+  # raw \$ and \`\`\` that must NOT be touched by shell expansion, unlike
+  # the front matter above.
+  cat >> "$filename" << 'REMINDER'
 
 <!--
   Formatting reminders — delete this comment block before publishing.
@@ -286,9 +314,21 @@ Write your opening paragraph here.
   Image (drop the file into static/images/ first, see static/images/README.md):
     ![Caption describing the image](/static/images/your-file.jpg)
 
-  Need equations or code too? See templates/post-template.md for examples.
+  Equation, inline (LaTeX via MathJax):
+    the membrane time constant $\tau_m = R_m C_m$
+
+  Equation, display:
+    $$
+    C_m \frac{dV}{dt} = -\frac{V - V_{rest}}{R_m} + I(t)
+    $$
+
+  Code:
+    ```python
+    def spike_times(v, threshold):
+        return [t for t, x in enumerate(v) if x > threshold]
+    ```
 -->
-EOF
+REMINDER
 
   echo "📝 Created $filename"
 
@@ -409,10 +449,13 @@ cmd_push() {
   local confirm=""
   read -rp "Push to GitHub now? [y/N] " confirm || true
   case "$confirm" in
-    y|Y) ;;
+    y|Y) push_and_watch ;;
     *) echo "Not pushed — commit(s) stayed local. Run 'blog push' again when ready."; return 0 ;;
   esac
+}
 
+# Push to origin/main and watch the GitHub Actions deploy, if `gh` is around.
+push_and_watch() {
   git push origin main
 
   echo "🚀 Pushed. Watching GitHub Actions deploy..."
@@ -430,6 +473,74 @@ cmd_push() {
   fi
 }
 
+# Delete a post: git-rm it (or plain rm if it was never tracked), rebuild to
+# confirm the site still builds, commit, then — only if it was actually
+# live — ask before pushing the removal out to the real site.
+cmd_delete() {
+  local file
+  file="$(resolve_post "$*")"
+  if [ -z "$file" ]; then
+    echo "No post selected."
+    return 0
+  fi
+
+  local status title
+  status="$(post_status "$file")"
+  title="$(post_title "$file")"
+  [ -z "$title" ] && title="$(basename "$file")"
+
+  echo "About to delete: $file"
+  echo "  Title:  $title"
+  echo "  Status: $status"
+  case "$status" in
+    published) echo "  ⚠️  This post is live — deleting it will need a push to take it down." ;;
+    unpushed)  echo "  This post is committed locally but not yet on GitHub." ;;
+    modified)  echo "  This post has uncommitted edits." ;;
+  esac
+
+  local confirm=""
+  read -rp "Delete this post? [y/N] " confirm || true
+  case "$confirm" in
+    y|Y) ;;
+    *) echo "Not deleted."; return 0 ;;
+  esac
+
+  if [ "$status" = "untracked" ]; then
+    rm -f "$file"
+    echo "🗑️  Deleted (it was never committed)."
+    return 0
+  fi
+
+  git rm -q "$file"
+  echo "🗑️  Removed from git: $file"
+
+  echo ""
+  echo "🔨 Building locally to confirm the site still builds cleanly..."
+  if ! ./build.sh > /tmp/blog-build.log 2>&1; then
+    echo "❌ Build failed after deletion — see /tmp/blog-build.log" >&2
+    echo "   The removal is staged but not committed; fix the build, or 'git reset' to undo." >&2
+    exit 1
+  fi
+  echo "✓ Build OK"
+
+  local msg="Remove post: $title"
+  read -rp "Commit message [$msg]: " custom_msg || true
+  [ -n "${custom_msg:-}" ] && msg="$custom_msg"
+  git commit -q -m "$msg"
+  echo "✓ Committed."
+
+  if [ "$status" = "published" ]; then
+    local push_confirm=""
+    read -rp "Push now, to actually remove it from the live site? [y/N] " push_confirm || true
+    case "$push_confirm" in
+      y|Y) push_and_watch ;;
+      *) echo "Committed locally only — run 'blog push' when ready to take it down live." ;;
+    esac
+  else
+    echo "Committed locally. Run 'blog push' when ready to push."
+  fi
+}
+
 cmd_help() {
   cat << EOF
 blog — manage posts for a Pandoc-based blog${SITE_URL:+ ($SITE_URL)}
@@ -439,9 +550,15 @@ Usage:
   blog new [title]        Draft a new post in $POSTS_DIR/
   blog edit [query]        Fuzzy-pick a post (fzf), edit in \$EDITOR, then tag it
   blog tags [query]        Fuzzy-pick a post and just do the tag step
+  blog delete [query]       Fuzzy-pick a post and delete it (rm, remove) —
+                             pushes the removal live too, if it was published
   blog status               List posts not yet committed/pushed  (check, pending)
   blog push                  Build, commit, and push pending posts (publish)
   blog help                   Show this help only
+
+The post picker (edit/tags/delete) tags every entry with its status:
+untracked, modified, unpushed, or published — so it's clear which posts
+are already live before you touch one.
 EOF
 }
 
@@ -449,6 +566,7 @@ case "${1:-__default__}" in
   new) shift; cmd_new "$@" ;;
   edit) shift; cmd_edit "$@" ;;
   tags) shift; cmd_tags "$@" ;;
+  delete|rm|remove) shift; cmd_delete "$@" ;;
   status|check|pending) cmd_status ;;
   push|publish) cmd_push ;;
   help|-h|--help) cmd_help ;;
