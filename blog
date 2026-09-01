@@ -1,0 +1,458 @@
+#!/usr/bin/env bash
+#
+# blog — manage posts for a Pandoc-based blog (originally written for
+# blog.giugliano.info / mgiugliano.github.io — see README for the repo
+# layout it assumes).
+#
+# Usage:
+#   blog                   Show help + status (default, no args)
+#   blog new [title]       Draft a new post in content/posts/
+#   blog edit [query]      Fuzzy-pick a post (fzf), open in $EDITOR, then
+#                           tag it
+#   blog tags [query]      Fuzzy-pick a post, then just do the tag step
+#   blog status            List posts not yet committed/pushed (check, pending)
+#   blog push               Build, commit, and push pending posts   (publish)
+#   blog help                Show this help only
+#
+# Tagging: `apfel` (Apple Intelligence from the command line — the on-device
+# Foundation Models framework, https://apfel.franzai.com) reads the post and
+# the blog's existing tag vocabulary and prints a quick hint — it never
+# decides anything by itself. You then land on one editable prompt,
+# pre-filled with that hint (or the post's current tags): press Enter to
+# accept it as-is, or edit the line first. No fuzzy finder for tags — there's
+# nothing to preview, and this makes "accept the proposal" a plain Enter.
+#
+# Assumes the repo looks like:
+#   content/posts/*.md   posts, each with --- title / date / tags --- front
+#                        matter (tags: a comma-separated list)
+#   build.sh             builds the site (blog push runs it before committing)
+#
+# Config (env):
+#   BLOG_REPO         Required. Path to your blog's working copy.
+#   BLOG_SITE_URL      Optional. Shown in a couple of messages, e.g.
+#                       https://blog.example.com — cosmetic only.
+#   BLOG_TAG_SCHEMA    Optional. Path to the apfel JSON schema for tag
+#                       output (default: ~/.bin/blog-tags.schema.json).
+#
+set -euo pipefail
+
+REPO="${BLOG_REPO:?Set BLOG_REPO to the path of your blog repo working copy}"
+POSTS_DIR="content/posts"
+SITE_URL="${BLOG_SITE_URL:-}"
+APFEL_SCHEMA="${BLOG_TAG_SCHEMA:-$HOME/.bin/blog-tags.schema.json}"
+
+cd "$REPO" 2>/dev/null || { echo "❌ Repo not found: $REPO (check BLOG_REPO)" >&2; exit 1; }
+
+# ---------- helpers ----------
+
+slugify() {
+  local s="$1"
+  s="$(printf '%s' "$s" | tr -s '[:space:]' '-')"
+  s="$(printf '%s' "$s" | sed -E 's/[^A-Za-z0-9-]//g')"
+  s="$(printf '%s' "$s" | sed -E 's/-+/-/g')"
+  s="$(printf '%s' "$s" | sed -E 's/^-//; s/-$//')"
+  printf '%s' "$s"
+}
+
+# Read the `title:` front-matter value out of a post file, quotes stripped.
+post_title() {
+  local line
+  line="$(grep -m1 '^title:' "$1" 2>/dev/null || true)"
+  line="${line#title:}"
+  line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  case "$line" in
+    \"*\") line="${line#\"}"; line="${line%\"}" ;;
+    \'*\') line="${line#\'}"; line="${line%\'}" ;;
+  esac
+  printf '%s' "$line"
+}
+
+# Pick a post file: exact path/filename bypasses the picker; otherwise fuzzy-
+# select with fzf (pre-filled with $1 as the query), falling back to a plain
+# numbered prompt if fzf isn't installed. Prints the chosen path, or nothing.
+resolve_post() {
+  local query="${1:-}"
+
+  if [ -n "$query" ] && [ -f "$query" ]; then
+    printf '%s' "$query"; return 0
+  fi
+  if [ -n "$query" ] && [ -f "$POSTS_DIR/$query" ]; then
+    printf '%s' "$POSTS_DIR/$query"; return 0
+  fi
+
+  local files
+  files="$(find "$POSTS_DIR" -maxdepth 1 -name '*.md' 2>/dev/null | sort)"
+  [ -z "$files" ] && { printf ''; return 0; }
+
+  if command -v fzf >/dev/null 2>&1; then
+    local chosen=""
+    chosen="$(
+      while IFS= read -r f; do
+        printf '%s\t%s  —  %s\n' "$f" "$(basename "$f")" "$(post_title "$f")"
+      done <<< "$files" \
+      | fzf --delimiter='\t' --with-nth=2 \
+            --prompt="Post> " --query="$query" \
+            --preview='bat --style=plain --color=always --language=markdown {1} 2>/dev/null || cat {1}' \
+            --preview-window=right:60%,wrap \
+      | cut -f1
+    )" || chosen=""
+    printf '%s' "$chosen"
+    return 0
+  fi
+
+  local matches
+  if [ -n "$query" ]; then
+    matches="$(while IFS= read -r f; do
+      case "$(basename "$f") $(post_title "$f")" in
+        *"$query"*) echo "$f" ;;
+      esac
+    done <<< "$files")"
+  else
+    matches="$files"
+  fi
+  [ -z "$matches" ] && { printf ''; return 0; }
+
+  local count
+  count="$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [ "$count" = "1" ]; then
+    printf '%s' "$matches"; return 0
+  fi
+
+  echo "Multiple matches — install 'fzf' for a picker, or narrow your query:" >&2
+  local i=1
+  while IFS= read -r f; do
+    printf '  %d) %-45s %s\n' "$i" "$(basename "$f")" "$(post_title "$f")" >&2
+    i=$((i+1))
+  done <<< "$matches"
+  local pick=""
+  read -rp "Pick a number: " pick || true
+  printf '%s' "$(printf '%s\n' "$matches" | sed -n "${pick}p")"
+}
+
+# Deduplicated, lowercase, comma-joined tag vocabulary across all posts.
+all_tags_vocab() {
+  grep -h '^tags:' "$POSTS_DIR"/*.md 2>/dev/null \
+    | sed 's/^tags:[[:space:]]*//' \
+    | tr ',' '\n' \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed '/^$/d' \
+    | sort -u \
+    | paste -sd, -
+}
+
+# Rewrite the `tags:` line in a post's front matter (adds one if missing).
+apply_tags() {
+  local file="$1" new_tags="$2"
+  python3 - "$file" "$new_tags" << 'PYEOF'
+import sys, re
+file_path, new_tags = sys.argv[1], sys.argv[2]
+with open(file_path, encoding='utf-8') as f:
+    content = f.read()
+if content.startswith('---'):
+    parts = content.split('---', 2)
+    if len(parts) >= 3:
+        front = parts[1]
+        if re.search(r'(?m)^tags:.*$', front):
+            front = re.sub(r'(?m)^tags:.*$', f'tags: {new_tags}', front, count=1)
+        else:
+            front = front.rstrip('\n') + f'\ntags: {new_tags}\n'
+        content = '---' + front + '---' + parts[2]
+with open(file_path, 'w', encoding='utf-8') as f:
+    f.write(content)
+PYEOF
+}
+
+# Tag a post: `apfel` (Apple's on-device model) prints a quick hint, then the
+# user is dropped into a single editable prompt pre-filled with that hint
+# (or the post's current tags) — press Enter to accept it as-is, or edit
+# the line first. No fuzzy finder here: tags aren't files, there's nothing
+# meaningful to preview, and a plain editable line makes "accept the
+# proposal" unambiguous (just press Enter).
+suggest_tags_for() {
+  local file="$1"
+  local vocab current_tags
+  vocab="$(all_tags_vocab)"
+  current_tags="$(grep -m1 '^tags:' "$file" 2>/dev/null | sed 's/^tags:[[:space:]]*//')"
+
+  local hint=""
+  if command -v apfel >/dev/null 2>&1; then
+    echo "🏷️  Extracting candidate tags from $(basename "$file") (apfel, on-device)..."
+    # Strip front matter first — otherwise apfel just parrots back whatever
+    # tags: line is already there instead of reading the post fresh.
+    local stripped raw
+    stripped="$(mktemp)"
+    python3 -c "
+import re
+with open('$file', encoding='utf-8') as f:
+    content = f.read()
+title, body = '', content
+if content.startswith('---'):
+    parts = content.split('---', 2)
+    if len(parts) >= 3:
+        m = re.search(r'(?m)^title:\s*(.*)\$', parts[1])
+        title = m.group(1).strip().strip('\"\'') if m else ''
+        body = parts[2].strip()
+print(f'Title: {title}\n\n{body}')
+" > "$stripped"
+
+    if raw="$(apfel -q -o json --temperature 0 \
+        --schema "$APFEL_SCHEMA" \
+        -s "Task: tag-selection, no explanations. Given a tag vocabulary and a blog post, choose at most 5 lowercase tags from the vocabulary; invent a new one only if nothing existing fits." \
+        -f "$stripped" \
+        "Vocabulary: $vocab" 2>/tmp/blog-apfel-err.log)"; then
+      hint="$(printf '%s' "$raw" | python3 -c "
+import json, sys
+try:
+    outer = json.load(sys.stdin)
+    tags = json.loads(outer['content'])['tags']
+    print(', '.join(tags))
+except Exception:
+    pass
+")"
+    else
+      echo "⚠️  apfel tag extraction failed — continuing without a hint." >&2
+    fi
+    rm -f "$stripped"
+  else
+    echo "⚠️  'apfel' not found (brew install apfel) — continuing without a hint." >&2
+  fi
+
+  echo ""
+  echo "Existing tags across the blog: ${vocab//,/, }"
+  echo "Current tags:   ${current_tags:-<none>}"
+  [ -n "$hint" ] && echo "Model suggests: $hint"
+  echo ""
+
+  local prefill="${hint:-$current_tags}"
+  local new_tags=""
+  read -e -i "$prefill" -rp "Tags (edit as needed, Enter to accept): " new_tags || true
+
+  if [ -z "$new_tags" ]; then
+    echo "No tags entered — left unchanged."
+    return 0
+  fi
+  if [ "$new_tags" = "$current_tags" ]; then
+    echo "Tags unchanged."
+    return 0
+  fi
+
+  apply_tags "$file" "$new_tags"
+  echo "✓ Tags updated: $new_tags"
+}
+
+# ---------- subcommands ----------
+
+cmd_new() {
+  local title="$*"
+  if [ -z "$title" ]; then
+    read -rp "Post title: " title || true
+  fi
+  if [ -z "$title" ]; then
+    echo "❌ A title is required." >&2
+    exit 1
+  fi
+
+  local today slug filename
+  today="$(date +%Y-%m-%d)"
+  slug="$(slugify "$title")"
+  filename="$POSTS_DIR/${today}-${slug}.md"
+
+  if [ -e "$filename" ]; then
+    echo "❌ $filename already exists — pick a different title, or edit it directly." >&2
+    exit 1
+  fi
+
+  local title_yaml="$title"
+  case "$title" in
+    *:*|*\"*) title_yaml="\"${title//\"/\\\"}\"" ;;
+  esac
+
+  mkdir -p "$POSTS_DIR"
+  cat > "$filename" << EOF
+---
+title: $title_yaml
+date: $today
+tags:
+---
+
+Write your opening paragraph here.
+
+<!--
+  Formatting reminders — delete this comment block before publishing.
+
+  Link:
+    [link text](https://example.com)
+
+  Image (drop the file into static/images/ first, see static/images/README.md):
+    ![Caption describing the image](/static/images/your-file.jpg)
+
+  Need equations or code too? See templates/post-template.md for examples.
+-->
+EOF
+
+  echo "📝 Created $filename"
+
+  if [ -n "${EDITOR:-}" ]; then
+    $EDITOR "$filename"
+  else
+    echo "   (no \$EDITOR set — open it yourself when ready)"
+  fi
+
+  echo ""
+  echo "Next: fill in tags + content, preview with ./build.sh, then 'blog status' / 'blog push'."
+}
+
+cmd_edit() {
+  local file
+  file="$(resolve_post "$*")"
+  if [ -z "$file" ]; then
+    echo "No post selected."
+    return 0
+  fi
+
+  echo "✏️  Editing $file"
+  if [ -n "${EDITOR:-}" ]; then
+    $EDITOR "$file"
+  else
+    echo "❌ \$EDITOR is not set — open $file yourself." >&2
+    return 1
+  fi
+
+  echo ""
+  suggest_tags_for "$file"
+}
+
+cmd_tags() {
+  local file
+  file="$(resolve_post "$*")"
+  if [ -z "$file" ]; then
+    echo "No post selected."
+    return 0
+  fi
+  suggest_tags_for "$file"
+}
+
+cmd_status() {
+  echo "🔎 Checking $POSTS_DIR against origin/main..."
+  git fetch --quiet origin main 2>/dev/null \
+    || echo "⚠️  Could not reach GitHub — 'unpushed commit' status may be stale."
+
+  local untracked modified unpushed pending
+  untracked="$(git ls-files --others --exclude-standard -- "$POSTS_DIR" 2>/dev/null || true)"
+  modified="$( { git diff --name-only -- "$POSTS_DIR"; git diff --cached --name-only -- "$POSTS_DIR"; } 2>/dev/null | sort -u)"
+  unpushed="$(git log origin/main..HEAD --name-only --pretty=format: -- "$POSTS_DIR" 2>/dev/null | sed '/^$/d' | sort -u)"
+
+  pending="$(printf '%s\n%s\n%s\n' "$untracked" "$modified" "$unpushed" | sed '/^$/d' | sort -u)"
+
+  if [ -z "$pending" ]; then
+    echo "✅ Everything in $POSTS_DIR is committed and pushed."
+    return 0
+  fi
+
+  echo ""
+  printf '%-52s %-10s %s\n' "FILE" "STATUS" "TITLE"
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    local status title
+    if printf '%s\n' "$untracked" | grep -qxF "$f"; then
+      status="untracked"
+    elif printf '%s\n' "$modified" | grep -qxF "$f"; then
+      status="modified"
+    else
+      status="unpushed"
+    fi
+    title="$(post_title "$f")"
+    [ -z "$title" ] && title="?"
+    printf '%-52s %-10s %s\n' "$f" "$status" "$title"
+  done <<< "$pending"
+}
+
+cmd_push() {
+  cmd_status
+  echo ""
+
+  local staged_files ahead
+  staged_files="$(git status --porcelain -- "$POSTS_DIR" 2>/dev/null | awk '{print $2}')"
+  ahead="$(git log origin/main..HEAD --name-only --pretty=format: -- "$POSTS_DIR" 2>/dev/null | sed '/^$/d')"
+
+  if [ -z "$staged_files" ] && [ -z "$ahead" ]; then
+    echo "Nothing to push."
+    return 0
+  fi
+
+  if [ -n "$staged_files" ]; then
+    echo "🔨 Building locally to check for errors..."
+    if ! ./build.sh > /tmp/blog-build.log 2>&1; then
+      echo "❌ Build failed — see /tmp/blog-build.log" >&2
+      exit 1
+    fi
+    echo "✓ Build OK"
+
+    # shellcheck disable=SC2086
+    git add $staged_files
+
+    local titles msg count
+    titles="$(for f in $staged_files; do post_title "$f"; done | paste -sd, -)"
+    count="$(printf '%s\n' "$staged_files" | sed '/^$/d' | wc -l | tr -d ' ')"
+    if [ "$count" = "1" ]; then
+      msg="Publish post: ${titles}"
+    else
+      msg="Publish posts: ${titles}"
+    fi
+
+    read -rp "Commit message [$msg]: " custom_msg || true
+    [ -n "${custom_msg:-}" ] && msg="$custom_msg"
+
+    git commit -m "$msg"
+  fi
+
+  local confirm=""
+  read -rp "Push to GitHub now? [y/N] " confirm || true
+  case "$confirm" in
+    y|Y) ;;
+    *) echo "Not pushed — commit(s) stayed local. Run 'blog push' again when ready."; return 0 ;;
+  esac
+
+  git push origin main
+
+  echo "🚀 Pushed. Watching GitHub Actions deploy..."
+  if command -v gh >/dev/null 2>&1; then
+    sleep 5
+    local run_id
+    run_id="$(gh run list --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+    if [ -n "$run_id" ] && gh run watch "$run_id" --exit-status; then
+      echo "✅ Deployed.${SITE_URL:+ $SITE_URL/blog.html}"
+    else
+      echo "⚠️  Couldn't confirm the deploy — check: gh run list"
+    fi
+  else
+    echo "(install 'gh' to auto-watch the deploy; otherwise check the Actions tab)"
+  fi
+}
+
+cmd_help() {
+  cat << EOF
+blog — manage posts for a Pandoc-based blog${SITE_URL:+ ($SITE_URL)}
+
+Usage:
+  blog                    Show this help + 'blog status' (no args)
+  blog new [title]        Draft a new post in $POSTS_DIR/
+  blog edit [query]        Fuzzy-pick a post (fzf), edit in \$EDITOR, then tag it
+  blog tags [query]        Fuzzy-pick a post and just do the tag step
+  blog status               List posts not yet committed/pushed  (check, pending)
+  blog push                  Build, commit, and push pending posts (publish)
+  blog help                   Show this help only
+EOF
+}
+
+case "${1:-__default__}" in
+  new) shift; cmd_new "$@" ;;
+  edit) shift; cmd_edit "$@" ;;
+  tags) shift; cmd_tags "$@" ;;
+  status|check|pending) cmd_status ;;
+  push|publish) cmd_push ;;
+  help|-h|--help) cmd_help ;;
+  __default__) cmd_help; echo ""; cmd_status ;;
+  *) echo "Unknown command: $1" >&2; echo ""; cmd_help; exit 1 ;;
+esac

@@ -5,7 +5,7 @@ Please note that my *bash-fu* is not very strong: be patient with me! Suggestion
 
   1. [Votational Nelocity](#votational-nelocity)(a bash script, inspired by Notational Velocity note taking)
   2. [Scratch pad](#scratch-pad) (a bash script, appending text to a monthly "scratch pad" text file)
-  3. 
+  3. [Blog post manager](#blog-post-manager) (a bash script to draft, tag, and publish posts on a Pandoc-based blog)
 
 ## Votational Nelocity
 
@@ -72,4 +72,48 @@ map cmd+s launch --env PATH=PATH --env EDITOR=EDITOR --env NOTES=NOTES /opt/home
 The specific location of the "scratch" file(s) is by default in `$EDITOR/scratch` and each time the script is launched it opens/creates a file uniquely named by year and month. Moreover, every time it is invoked, a timestamp is added and the cursor is placed at the very bottom of the file with nvim already in insert mode. 
 
 ![demo3](img/demo3.gif)
+
+---------------
+
+## Blog post manager
+
+I run a small [Pandoc](https://pandoc.org/)-based blog (not Jekyll/Hugo — a plain `build.sh` that converts Markdown posts to HTML and publishes to GitHub Pages). `blog` is the script I use day to day to draft, tag, and publish posts to it without leaving the terminal.
+
+```
+blog                   Show help + status (default, no args)
+blog new [title]       Draft a new post in content/posts/
+blog edit [query]      Fuzzy-pick a post (fzf), open in $EDITOR, then tag it
+blog tags [query]      Fuzzy-pick a post, then just do the tag step
+blog status            List posts not yet committed/pushed (check, pending)
+blog push               Build, commit, and push pending posts   (publish)
+blog help                Show this help only
+```
+
+`blog edit`/`blog tags` fuzzy-find a post by filename or title (fzf, with a `bat`-rendered markdown preview), open it in `$EDITOR`, then help with tags: [apfel](https://apfel.franzai.com) — Apple Intelligence's on-device model, from the command line — reads the post plus the blog's existing tag vocabulary and prints a quick hint, then you land on one editable prompt pre-filled with that hint (or the post's current tags): press Enter to accept it as-is, or edit the line first. No fuzzy finder for the tags themselves — they aren't files, there's nothing meaningful to preview, and a plain editable line makes "accept the model's proposal" a plain Enter instead of a multi-step picker.
+
+`blog push` builds the site locally first (so a broken post never gets committed), proposes a commit message from the post title(s), and asks for confirmation before it actually pushes.
+
+### Assumptions about the target repo
+
+This isn't a generic blogging-platform CLI — it assumes a specific (if simple) layout:
+
+- `content/posts/*.md`, each with `---` front matter (`title`, `date`, `tags:` as a comma-separated list) `---`;
+- a `build.sh` at the repo root that builds the site (`blog push` runs it before committing);
+- posts published via `git push` (to GitHub Pages, in my case).
+
+If your blog looks roughly like that, it should work as-is; otherwise it's meant more as a starting point to adapt than a drop-in tool.
+
+### Configuration (env vars)
+
+- `BLOG_REPO` — **required**. Path to your blog's working copy.
+- `BLOG_SITE_URL` — optional, cosmetic only (e.g. `https://blog.example.com`), shown in a couple of messages.
+- `BLOG_TAG_SCHEMA` — optional, path to the `apfel` JSON schema for tag output (default: `~/.bin/blog-tags.schema.json`, included in this repo as `blog-tags.schema.json`).
+
+### Requirements: fzf, bat, apfel, gh, python3
+
+- `brew install fzf`
+- `brew install bat` (used for the post preview in `blog edit`/`blog tags`; falls back to `cat` if missing)
+- `brew install apfel` (needs macOS 26+ and Apple Intelligence enabled; tagging hints are skipped gracefully without it)
+- `brew install gh` (optional — used to watch the GitHub Actions deploy after `blog push`; skipped gracefully without it)
+- `python3` (used for the front-matter/JSON handling; ships with macOS)
 
